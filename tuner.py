@@ -38,6 +38,7 @@ def find_device(label="Virtual Camera"):
 DEVICE = find_device()
 YAML_PATH = "/usr/share/libcamera/ipa/simple/ov08x40.yaml"
 CONF_PATH = "/etc/v4l2-relayd.d/camera.conf"
+PIPELINE_PATH = "/etc/v4l2-relayd.d/videosrc.pipeline"
 STATE_PATH = "/etc/v4l2-relayd.d/tuner-state.json"
 SERVICE = "v4l2-relayd@camera.service"
 
@@ -51,6 +52,7 @@ DEFAULTS = {
     "gamma": 1.0,
     "hflip": 0.0,
     "agc_target": 2.5,
+    "vibrance": 0.0,
 }
 
 LUMA = (0.2126, 0.7152, 0.0722)
@@ -93,8 +95,10 @@ algorithms:
 """
 
 
-def conf_text(p):
+def post_chain(p):
     post = ""
+    if p["vibrance"] > 0:
+        post += f" ! vibrance amount={p['vibrance']:.2f}"
     if p["hflip"]:
         post += " ! videoflip method=horizontal-flip"
     if p["brightness"] != 0 or p["contrast"] != 1:
@@ -102,11 +106,27 @@ def conf_text(p):
                  f" contrast={p['contrast']:.2f}")
     if p["gamma"] != 1:
         post += f" ! gamma gamma={p['gamma']:.2f}"
+    return post
+
+
+def pipeline_text(p):
+    """Full input pipeline, written to PIPELINE_PATH (may contain newlines
+    and quotes - the ExecStart override reads it from the file)."""
+    post = post_chain(p)
+    return ("libcamerasrc ! "
+            "video/x-raw,format=RGBA,width=1280,height=720,framerate=30/1"
+            f"{post} ! videoconvert")
+
+
+def conf_text(p):
+    # VIDEOSRC kept as a GL-free fallback for setups without the
+    # pipeline-file ExecStart override
     return ('VIDEOSRC="libcamerasrc ! '
             "video/x-raw,format=RGBA,width=1280,height=720,framerate=30/1"
-            f"{post} ! videoconvert\"\n"
-            # read by the (optionally patched) softISP AGC; harmless otherwise
-            f"SOFTISP_AGC_TARGET={p['agc_target']:.2f}\n")
+            f"{post_chain(p)} ! videoconvert\"\n"
+            f"SOFTISP_AGC_TARGET={p['agc_target']:.2f}\n"
+            # our out-of-tree vibrance element lives here
+            "GST_PLUGIN_PATH=/usr/local/lib/gstreamer-1.0\n")
 
 
 def load_state():
@@ -123,6 +143,8 @@ def apply_state(p):
         fh.write(yaml_text(p))
     with open(CONF_PATH, "w") as fh:
         fh.write(conf_text(p))
+    with open(PIPELINE_PATH, "w") as fh:
+        fh.write(pipeline_text(p))
     with open(STATE_PATH, "w") as fh:
         json.dump(p, fh, indent=2)
     subprocess.run(["systemctl", "restart", SERVICE], check=True, timeout=30)
@@ -217,11 +239,12 @@ const SLIDERS = [
  ["saturation","Saturation",0.8,2.2,0.05],
  ["gain_r","Red gain (higher = warmer)",0.85,1.2,0.01],
  ["gain_g","Green gain (lower = less green)",0.75,1.15,0.01],
- ["gain_b","Blue gain (higher = cooler)",0.85,1.2,0.01],
+ ["gain_b","Blue gain (higher = cooler)",0.85,1.6,0.01],
  ["brightness","Brightness (post)",-0.4,0.4,0.02],
  ["contrast","Contrast (post)",0.5,1.8,0.05],
  ["gamma","Gamma (post, <1 darkens mids)",0.4,2.5,0.05],
  ["agc_target","Exposure target (needs patched IPA)",1.0,3.5,0.1],
+ ["vibrance","Vibrance (0=off)",0,1.2,0.05],
 ];
 let state={};
 function build(){

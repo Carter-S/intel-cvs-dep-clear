@@ -8,3 +8,4 @@
 *.order
 .tmp_versions/
 __pycache__/
+*.so

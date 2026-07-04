@@ -20,14 +20,20 @@ this hardware. This repo solves all three:
 ## Quick start
 
 ```bash
-sudo apt install build-essential linux-headers-$(uname -r)
-make                     # build the module
-sudo insmod cvs_dep_clear.ko
-cam -l                   # should now list: Internal front camera
-sudo ./install.sh        # make it permanent (DKMS + load at boot)
-sudo ./setup-relay.sh    # expose it to apps as "Virtual Camera"
-sudo python3 tuner.py    # optional: tune colours live at http://127.0.0.1:8787
+git clone https://github.com/Carter-S/intel-cvs-dep-clear.git
+cd intel-cvs-dep-clear
+sudo ./setup.sh          # installs everything: packages, module, bridge, tuning
 ```
+
+That's it — apps should list a webcam called **"Virtual Camera"**. Then,
+optionally, tune the image live (exposure, colour, vibrance, mirror):
+
+```bash
+sudo python3 tuner.py    # -> http://127.0.0.1:8787
+```
+
+Each step can also be run individually (`install.sh` = kernel module,
+`setup-relay.sh` = app bridge + tuning + vibrance element) — see below.
 
 ---
 
@@ -136,8 +142,16 @@ uncalibrated.yaml` and renders flat, hazy colour. Real fixes:
   `/usr/share/libcamera/ipa/simple/ov08x40.yaml`.
 - **Live tuner:** `sudo python3 tuner.py` → http://127.0.0.1:8787 — sliders
   for saturation / per-channel gains / brightness / contrast / gamma /
-  mirror, with a live 30fps preview. Every change rewrites the tuning file +
-  relay config and restarts the relay. Settings persist.
+  mirror / exposure target / **vibrance**, with a live 30fps preview. Every
+  change rewrites the tuning file + relay config and restarts the relay.
+  Settings persist.
+- **Digital vibrance:** `gst-vibrance/` is a small out-of-tree GStreamer
+  element (`vibrance amount=0..2`) implementing NVIDIA-style vibrance:
+  saturation boost weighted towards *muted* colours, so the image pops
+  without wrecking skin tones. CPU (in-place, ~740fps at 720p on ARL-U).
+  We first implemented it as a `glshader` GPU filter — don't: gst-gl's
+  headless paths tear/flicker on this stack (dma-buf sync). The CPU element
+  is deterministic and costs ~4% of one core at 30fps.
 
 ### Known limitation: exposure
 

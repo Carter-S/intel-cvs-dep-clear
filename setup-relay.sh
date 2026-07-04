@@ -34,6 +34,21 @@ else
     echo "keeping existing /usr/share/libcamera/ipa/simple/ov08x40.yaml"
 fi
 
+echo "== pipeline-from-file override (multi-element pipelines from tuner.py) =="
+cat > /etc/systemd/system/v4l2-relayd@.service.d/pipeline-file.conf <<'EOF'
+[Service]
+ExecStart=
+ExecStart=/bin/sh -c 'DEVICE=$(grep -l -m1 -E "^${CARD_LABEL}$" /sys/devices/virtual/video4linux/*/name | cut -d/ -f6); if [ -r /etc/v4l2-relayd.d/videosrc.pipeline ]; then VIDEOSRC="$(cat /etc/v4l2-relayd.d/videosrc.pipeline)"; fi; exec /usr/bin/v4l2-relayd -i "$${VIDEOSRC}" $${SPLASHSRC:+-s "${SPLASHSRC}"} -o "appsrc name=appsrc caps=video/x-raw,format=${FORMAT},width=${WIDTH},height=${HEIGHT},framerate=${FRAMERATE} ! videoconvert ! v4l2sink name=v4l2sink device=/dev/$${DEVICE}" $EXTRA_OPTS'
+EOF
+
+echo "== vibrance plugin (optional, needs gst dev headers) =="
+if pkg-config --exists gstreamer-video-1.0 2>/dev/null; then
+    make -C "$(dirname "$0")/gst-vibrance" install && echo "vibrance element installed"
+else
+    echo "SKIPPED: install libgstreamer-plugins-base1.0-dev then run:"
+    echo "  sudo make -C gst-vibrance install"
+fi
+
 echo "== loading loopback + starting relay =="
 modprobe v4l2loopback exclusive_caps=1 card_label="Virtual Camera"
 systemctl daemon-reload
