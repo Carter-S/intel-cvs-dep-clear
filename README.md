@@ -144,11 +144,12 @@ uncalibrated.yaml` and renders flat, hazy colour. Real fixes:
 libcamera ≤ 0.7 (and master at time of writing) has **no exposure control
 in the softISP** — the AGC brightness target is a hardcoded constant, so
 backlit scenes blow out and no config can prevent it.
-`patches/softisp-agc-target.patch` makes the target read the
-`SOFTISP_AGC_TARGET` environment variable (which `tuner.py`'s "Exposure
+`patches/softisp-agc-target.patch` (**verified working**) makes the target
+read the `SOFTISP_AGC_TARGET` environment variable (which `tuner.py`'s "Exposure
 target" slider already writes). Apply it to Ubuntu's libcamera source,
 rebuild `ipa_soft_simple.so`, and replace the one file (the module runs
-isolated when unsigned — still works). Physical advice that beats software:
+isolated when unsigned — still works). Note a `libcamera-ipa` package
+update will silently restore the stock module — re-install after upgrades. Physical advice that beats software:
 don't sit with a bright light behind you, and wipe the lens.
 
 ---
