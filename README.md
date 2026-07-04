@@ -61,6 +61,10 @@ sensor. Everything downstream (int3472 power/GPIO plumbing, `ov08x40`,
 - Kernel headers and build tools: `sudo apt install build-essential linux-headers-$(uname -r)`
 - For the camera to actually stream you also want `libcamera` /
   `pipewire-libcamera` (GNOME/Firefox consume it via PipeWire).
+- **Secure Boot:** the module is unsigned. With Secure Boot enabled, `insmod`
+  will be refused — use the DKMS install (below), which on Ubuntu signs modules
+  with your machine's MOK (you may be prompted to enroll one), or disable
+  Secure Boot.
 
 ## Install
 
@@ -97,9 +101,27 @@ sudo ./uninstall.sh
 
 | Machine | SoC | Kernel | Sensor | Status |
 |---|---|---|---|---|
-| Lenovo ThinkPad X1 Carbon Gen 13 (21NX) | Core Ultra 7 255U (ARL-U) | 7.0.0-22 (Ubuntu) | OV08X40 | *testing in progress* |
+| Lenovo ThinkPad X1 Carbon Gen 13 (21NX) | Core Ultra 7 255U (ARL-U) | 7.0.0-22 (Ubuntu) | OV08X40 | ✅ working — 30 fps capture verified |
 
 PRs welcome to extend this table.
+
+What success looks like in dmesg, ~3 seconds after loading the module:
+
+```
+cvs_dep_clear: clearing ACPI _DEP on INTC10E0:00
+cvs_dep_clear: done - deferred consumers will now enumerate
+ov08x40 i2c-OVTI08F4:00: supply dovdd not found, using dummy regulator
+ov08x40 i2c-OVTI08F4:00: supply avdd not found, using dummy regulator
+ov08x40 i2c-OVTI08F4:00: supply dvdd not found, using dummy regulator
+```
+
+(The "dummy regulator" lines are normal on int3472 platforms.) Then:
+
+```
+$ cam -l
+Available cameras:
+1: Internal front camera (\_SB_.PC00.LNK1)
+```
 
 ## Limitations
 
