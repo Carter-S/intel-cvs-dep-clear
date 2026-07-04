@@ -1,157 +1,196 @@
 # intel-cvs-dep-clear
 
-**Fix the built-in MIPI camera on Intel Arrow Lake laptops on Linux** (e.g. Lenovo
-ThinkPad X1 Carbon Gen 13) — a tiny kernel module that unblocks camera sensor
-enumeration on platforms with the Intel CVS (Computer Vision Sensing) aggregator
-`INTC10E0`, for which no mainline Linux driver exists yet.
+**Make the built-in MIPI camera work on Intel Arrow Lake laptops on Linux**
+(e.g. Lenovo ThinkPad X1 Carbon Gen 13) — end to end: kernel module to
+unblock the sensor, a bridge so Chrome/Zoom/Meet can use it, and a live
+tuning UI for image quality.
 
-> **Status: EXPERIMENTAL.** This is a stopgap until a real Intel CVS (ARL) driver
-> lands upstream. It works by satisfying an ACPI dependency, not by implementing
-> the CVS handshake. See [Limitations](#limitations).
+> **Status: EXPERIMENTAL but daily-driven.** This is a stopgap until a real
+> Intel CVS (ARL) driver and an ov08x40 calibration land upstream.
 
-## Symptoms this addresses
+There are **three separate problems** between you and a working camera on
+this hardware. This repo solves all three:
 
-You have an Arrow Lake (Core Ultra 200U/200V series) laptop and:
+| # | Problem | Fix in this repo |
+|---|---------|------------------|
+| 1 | Sensor never enumerates (no i2c client, `cam -l` empty) | `cvs_dep_clear` kernel module (`install.sh`) |
+| 2 | libcamera works but Chrome/Zoom/Meet can't see the camera | v4l2loopback bridge (`setup-relay.sh`) |
+| 3 | Image is washed out / wrong colours | softISP tuning file + live tuner (`tuner.py`) |
 
-- The built-in camera does not appear: `cam -l` shows no cameras, no `/dev/video*`
-  capture device, `libcamera` reports `No sensor found for /dev/media0`.
-- `dmesg` shows:
-  ```
-  int3472-discrete INT3472:0b: INT3472 seems to have no dependents.
-  int3472-discrete INT3472:0c: INT3472 seems to have no dependents.
-  ```
-  and earlier in boot:
-  ```
-  int3472-discrete INT3472:0b: cannot find GPIO chip INTC10B2:00, deferring
-  ```
-- The sensor's ACPI device exists (`/sys/bus/acpi/devices/OVTI08F4:00`, status 15)
-  but has **no `physical_node`** — it is never instantiated as an I²C client.
-- `/sys/bus/acpi/devices/INTC10E0:00` exists and no driver binds to it.
+## Quick start
+
+```bash
+sudo apt install build-essential linux-headers-$(uname -r)
+make                     # build the module
+sudo insmod cvs_dep_clear.ko
+cam -l                   # should now list: Internal front camera
+sudo ./install.sh        # make it permanent (DKMS + load at boot)
+sudo ./setup-relay.sh    # expose it to apps as "Virtual Camera"
+sudo python3 tuner.py    # optional: tune colours live at http://127.0.0.1:8787
+```
+
+---
+
+## Problem 1: the sensor never enumerates
+
+### Symptoms
+
+- `cam -l` shows no cameras; `libcamera` reports `No sensor found for /dev/media0`
+- `dmesg`: `int3472-discrete INT3472:0b: INT3472 seems to have no dependents.`
+  and, early in boot, `cannot find GPIO chip INTC10B2:00, deferring`
+- `/sys/bus/acpi/devices/OVTI08F4:00` exists (status 15) but has **no
+  `physical_node`** — the sensor is never instantiated as an I²C client
+- `/sys/bus/acpi/devices/INTC10E0:00` exists and nothing binds to it
 - All the right modules are loaded (`intel_ipu6_isys`, `usbio`, `gpio_usbio`,
-  `i2c_usbio`, `intel_skl_int3472_discrete`, `ov08x40`) — and it still doesn't work.
+  `i2c_usbio`, `intel_skl_int3472_discrete`, `ov08x40`) — still nothing
 
-## Root cause
+### Root cause
 
-On these platforms the camera sensor (e.g. OmniVision OV08X40, ACPI HID
-`OVTI08F4`) lists the **Intel CVS aggregator `INTC10E0`** in its ACPI `_DEP`
-(dependencies). The Linux kernel *honors* this dependency — `INTC10E0` is in
-`acpi_honor_dep_ids` in `drivers/acpi/scan.c`, annotated:
+The camera sensor (OmniVision OV08X40, ACPI HID `OVTI08F4`) lists the
+**Intel CVS aggregator `INTC10E0`** ("Computer Vision Sensing", an always-on
+vision co-processor that shares the sensor with the host) in its ACPI `_DEP`.
+The kernel honors that dependency — `drivers/acpi/scan.c`:
 
 ```
 "INTC10E0", /* CVS (ARL) driver must be loaded to allow camera streaming */
 ```
 
-Enumeration of the sensor is deferred until an `INTC10E0` driver calls
-`acpi_dev_clear_dependencies()`. **No such driver exists in mainline Linux**
-(Intel's out-of-tree [`vision-drivers`](https://github.com/intel/vision-drivers)
-`intel_cvs` only supports Lunar Lake via the LJCA bridge). So the sensor waits
-forever, never becomes an I²C client, and the camera stack never assembles.
+Enumeration of the sensor is deferred until an INTC10E0 driver calls
+`acpi_dev_clear_dependencies()`. **No such driver exists in mainline** (Intel's
+out-of-tree [vision-drivers](https://github.com/intel/vision-drivers)
+`intel_cvs` only supports Lunar Lake via LJCA). The sensor waits forever.
 
-This module performs exactly the one call the missing driver would make: it
-clears the ACPI dependency on `INTC10E0`, letting the ACPI core enumerate the
-sensor. Everything downstream (int3472 power/GPIO plumbing, `ov08x40`,
-`ipu-bridge`, IPU6) already exists in recent kernels and takes over from there.
+### Fix
 
-## Requirements
-
-- A kernel with the full in-tree stack: IPU6, USBIO (`usbio`, `gpio-usbio`,
-  `i2c-usbio` — mainline since 6.18), `intel_skl_int3472`, and your sensor's
-  driver (e.g. `ov08x40`). On Ubuntu with an older kernel, install
-  `linux-modules-usbio-generic` / `linux-modules-ipu6-generic`.
-- Kernel headers and build tools: `sudo apt install build-essential linux-headers-$(uname -r)`
-- For the camera to actually stream you also want `libcamera` /
-  `pipewire-libcamera` (GNOME/Firefox consume it via PipeWire).
-- **Secure Boot:** the module is unsigned. With Secure Boot enabled, `insmod`
-  will be refused — use the DKMS install (below), which on Ubuntu signs modules
-  with your machine's MOK (you may be prompted to enroll one), or disable
-  Secure Boot.
-
-## Install
-
-### Quick test (nothing persistent)
-
-```bash
-make
-sudo insmod cvs_dep_clear.ko
-# wait a few seconds, then:
-ls /sys/bus/i2c/devices/ | grep -i ovti   # sensor i2c client should appear
-cam -l                                    # camera should be listed
-```
-
-A reboot removes it. If it works, make it permanent:
-
-### Permanent (DKMS — survives kernel updates)
-
-```bash
-sudo ./install.sh
-```
-
-This registers the module with DKMS and loads it at boot via
-`/etc/modules-load.d/cvs-dep-clear.conf`. Load order doesn't matter: the ACPI
-dependency count only reaches zero once *all* suppliers are ready, so the sensor
-enumerates only when int3472/USBIO have also done their part.
-
-### Uninstall
-
-```bash
-sudo ./uninstall.sh
-```
-
-## Verified working on
-
-| Machine | SoC | Kernel | Sensor | Status |
-|---|---|---|---|---|
-| Lenovo ThinkPad X1 Carbon Gen 13 (21NX) | Core Ultra 7 255U (ARL-U) | 7.0.0-22 (Ubuntu) | OV08X40 | ✅ working — 30 fps capture verified |
-
-PRs welcome to extend this table.
-
-What success looks like in dmesg, ~3 seconds after loading the module:
-
-```
-cvs_dep_clear: clearing ACPI _DEP on INTC10E0:00
-cvs_dep_clear: done - deferred consumers will now enumerate
-ov08x40 i2c-OVTI08F4:00: supply dovdd not found, using dummy regulator
-ov08x40 i2c-OVTI08F4:00: supply avdd not found, using dummy regulator
-ov08x40 i2c-OVTI08F4:00: supply dvdd not found, using dummy regulator
-```
-
-(The "dummy regulator" lines are normal on int3472 platforms.) Then:
-
-```
-$ cam -l
-Available cameras:
-1: Internal front camera (\_SB_.PC00.LNK1)
-```
-
-## Limitations
-
-- **This does not implement the CVS protocol.** The CVS chip is an always-on
-  vision co-processor that shares the sensor with the host. This module only
-  tells the kernel "stop waiting for a CVS driver" — it does not perform the
-  CVS↔host ownership handshake. On machines where the CVS chip holds the sensor
-  at power-on, sensor I²C access may still fail (typically an `ov08x40` chip-ID
-  read error in dmesg). Please open an issue with your dmesg if you hit this.
-- Any CVS-dependent features (Windows Studio Effects-style presence detection,
-  etc.) will not work — but they never do on Linux today anyway.
-- Not a substitute for a real driver. Watch these for upstream progress:
-  - [intel/ipu6-drivers#281](https://github.com/intel/ipu6-drivers/issues/281) —
-    INT3472 GPIO type 0x12 / Lattice MIPI aggregator support
-  - [intel/ipu6-drivers#373](https://github.com/intel/ipu6-drivers/issues/373)
-  - [intel/vision-drivers](https://github.com/intel/vision-drivers) — Intel's
-    out-of-tree `intel_cvs` (LNL-only at time of writing)
-
-## How it works (30 seconds)
+`cvs_dep_clear.c` performs exactly the call the missing driver would make:
 
 ```c
 adev = acpi_dev_get_first_match_dev("INTC10E0", NULL, -1);
 acpi_dev_clear_dependencies(adev);
 ```
 
-That's the entire mechanism. `acpi_dev_clear_dependencies()` is the exported
-kernel API that supplier drivers call to announce "I'm ready"; when the deferred
-sensor's unmet-dependency count reaches zero, the ACPI core enumerates it,
-i2c-core creates the client on the USBIO I²C bus, and the sensor driver probes.
+The ACPI core then enumerates the deferred sensor, i2c-core creates the
+client on the USBIO bus, `ov08x40` probes, and `ipu-bridge` wires the media
+graph. `sudo ./install.sh` registers it with DKMS and loads it at boot
+(order doesn't matter — the dependency count only reaches zero when the
+int3472/USBIO side is also ready).
+
+What success looks like, ~3s after loading:
+
+```
+cvs_dep_clear: clearing ACPI _DEP on INTC10E0:00
+ov08x40 i2c-OVTI08F4:00: supply dovdd not found, using dummy regulator
+$ cam -l
+Available cameras:
+1: Internal front camera (\_SB_.PC00.LNK1)
+```
+
+("dummy regulator" lines are normal on int3472 platforms.)
+
+---
+
+## Problem 2: apps can't see the camera
+
+libcamera working ≠ working webcam. IPU6 MIPI cameras don't produce a
+classic `/dev/video*` device; apps need either native libcamera/PipeWire
+support or a bridge.
+
+**Chrome's native path is broken.** With `chrome://flags` →
+"PipeWire Camera support" enabled (Chrome 148 + PipeWire 1.6), pages that
+request the camera **render fully black** — the stream setup wedges the tab
+compositing before a single frame flows. Leave that flag **Disabled**.
+
+**The bridge that works:** `v4l2-relayd` + `v4l2loopback` relays
+`libcamerasrc` into a virtual V4L2 device ("Virtual Camera") that every app
+(Chrome, Zoom, Slack, OBS) treats as a normal USB-style webcam.
+`sudo ./setup-relay.sh` configures all of it, including two non-obvious
+fixes we lost hours to:
+
+1. **systemd sandbox blocks the software ISP.** `v4l2-relayd`'s unit ships
+   `DevicePolicy=closed` without `/dev/dma_heap` / `/dev/udmabuf`, so
+   libcamera's softISP fails (`Could not open any dma-buf provider`) and the
+   camera produces nothing. A drop-in adds `DeviceAllow=char-dma_heap` and
+   `DeviceAllow=/dev/udmabuf`.
+2. **The relay input caps must pin format AND framerate.**
+   `VIDEOSRC="libcamerasrc ! video/x-raw,format=RGBA,width=1280,height=720,framerate=30/1 ! videoconvert"`.
+   Without explicit `framerate`, buffer timestamps confuse the relay and it
+   floods the loopback with black filler frames — apps see ~1fps, flickering
+   to black. Asking libcamerasrc for 720p directly also keeps CPU low (the
+   softISP scales on the GPU).
+
+**Caveat:** the loopback accepts **one reader at a time** (second reader
+gets `S_FMT: Device or resource busy`). Close other camera apps if the
+picture is black, and quit `tuner.py` before joining a call.
+
+---
+
+## Problem 3: image quality (washed out, wrong colours)
+
+The softISP has no calibration for ov08x40 — it logs
+`Configuration file 'ov08x40.yaml' not found ... falling back to
+uncalibrated.yaml` and renders flat, hazy colour. Real fixes:
+
+- **Tuning file:** `data/ov08x40.yaml` (installed by `setup-relay.sh`)
+  provides colour-correction matrices we calibrated grey-world style on a
+  real unit. libcamera picks it up by sensor name at
+  `/usr/share/libcamera/ipa/simple/ov08x40.yaml`.
+- **Live tuner:** `sudo python3 tuner.py` → http://127.0.0.1:8787 — sliders
+  for saturation / per-channel gains / brightness / contrast / gamma /
+  mirror, with a live 30fps preview. Every change rewrites the tuning file +
+  relay config and restarts the relay. Settings persist.
+
+### Known limitation: exposure
+
+libcamera ≤ 0.7 (and master at time of writing) has **no exposure control
+in the softISP** — the AGC brightness target is a hardcoded constant, so
+backlit scenes blow out and no config can prevent it.
+`patches/softisp-agc-target.patch` makes the target read the
+`SOFTISP_AGC_TARGET` environment variable (which `tuner.py`'s "Exposure
+target" slider already writes). Apply it to Ubuntu's libcamera source,
+rebuild `ipa_soft_simple.so`, and replace the one file (the module runs
+isolated when unsigned — still works). Physical advice that beats software:
+don't sit with a bright light behind you, and wipe the lens.
+
+---
+
+## Troubleshooting quick reference
+
+| Symptom | Cause | Fix |
+|---|---|---|
+| `INT3472 seems to have no dependents` | INTC10E0 dep never cleared | load `cvs_dep_clear` |
+| `cannot find GPIO chip INTC10B2:00, deferring` at boot | USBIO probes after int3472 | harmless; resolves once `gpio_usbio` registers |
+| `cam -l` empty, `OVTI08F4:00` has no `physical_node` | sensor enumeration deferred | load `cvs_dep_clear` |
+| Chrome page black with PipeWire camera flag | broken Chrome/PipeWire path | disable the flag, use the relay |
+| Virtual Camera exists, only black frames | softISP dma-buf blocked by sandbox | dmabuf drop-in (`setup-relay.sh`) |
+| ~1fps + flicker to black | missing `framerate` in relay caps | pin caps (`setup-relay.sh`) |
+| `Device or resource busy` on the loopback | second reader | one camera app at a time |
+| Washed-out / green / pale image | no tuning file for ov08x40 | `data/ov08x40.yaml` + `tuner.py` |
+| Blown-out highlights | AGC target hardcoded | `patches/softisp-agc-target.patch`, fix lighting |
+
+## Verified working on
+
+| Machine | SoC | Kernel | Sensor | Status |
+|---|---|---|---|---|
+| Lenovo ThinkPad X1 Carbon Gen 13 (21NX) | Core Ultra 7 255U (ARL-U) | 7.0.0-22 (Ubuntu) | OV08X40 | ✅ 30 fps in Google Meet, calibrated colour |
+
+PRs welcome — especially additional machines for this table and a proper
+AIQB-derived ov08x40 calibration.
+
+## Watch upstream
+
+- [intel/ipu6-drivers#281](https://github.com/intel/ipu6-drivers/issues/281) — INT3472 GPIO / Lattice aggregator support
+- [intel/ipu6-drivers#373](https://github.com/intel/ipu6-drivers/issues/373)
+- [intel/vision-drivers](https://github.com/intel/vision-drivers) — a real `intel_cvs` for ARL would obsolete problem 1
+- [libcamera softISP tuning patches](https://patchwork.libcamera.org/patch/26699/) — factory-style calibration for sibling sensors
+
+## Requirements
+
+Kernel with the in-tree stack: IPU6, USBIO (mainline ≥ 6.18), `int3472`,
+`ov08x40`. On older Ubuntu kernels: `linux-modules-usbio-generic`
+`linux-modules-ipu6-generic`. For apps: `pipewire-libcamera` optional; the
+relay path needs only what `setup-relay.sh` installs. **Secure Boot:** the
+module is unsigned — use the DKMS install (MOK signing) or disable SB.
 
 ## License
 
-GPL-2.0 (kernel module requirement, and the right thing anyway).
+GPL-2.0.
