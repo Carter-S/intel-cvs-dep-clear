@@ -125,6 +125,9 @@ def conf_text(p):
             "video/x-raw,format=RGBA,width=1280,height=720,framerate=30/1"
             f"{post_chain(p)} ! videoconvert\"\n"
             f"SOFTISP_AGC_TARGET={p['agc_target']:.2f}\n"
+            # cap exposure at ~30ms so the sensor holds 30fps in dim light
+            # (long exposures drop fps and stall the relay -> blinking)
+            "SOFTISP_MAX_EXPOSURE_US=30000\n"
             # our out-of-tree vibrance element lives here
             "GST_PLUGIN_PATH=/usr/local/lib/gstreamer-1.0\n"
             # instant placeholder frames while the camera warms up (~2.5s):

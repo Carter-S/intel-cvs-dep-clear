@@ -53,3 +53,44 @@
  		if (again > context.configuration.agc.again10) {
  			double next = again * kExpNumeratorDown / kExpDenominator;
  			if (again - next < context.configuration.agc.againMinStep)
+--- a/src/ipa/simple/soft_simple.cpp
++++ b/src/ipa/simple/soft_simple.cpp
+@@ -7,6 +7,7 @@
+ 
+ #include <chrono>
+ #include <stdint.h>
++#include <cstdlib>
+ #include <sys/mman.h>
+ 
+ #include <linux/v4l2-controls.h>
+@@ -215,6 +216,30 @@
+ 		context_.sensorInfo.minLineLength * 1.0s / context_.sensorInfo.pixelRate;
+ 	context_.configuration.agc.exposureMin = exposureInfo.min().get<int32_t>();
+ 	context_.configuration.agc.exposureMax = exposureInfo.max().get<int32_t>();
++
++	/*
++	 * Local patch: optionally cap exposure time so the sensor never
++	 * stretches the frame duration below the advertised frame rate
++	 * (long exposures in dim scenes otherwise drop 30fps to ~20fps and
++	 * downstream consumers stall). SOFTISP_MAX_EXPOSURE_US sets the cap
++	 * in microseconds; the AGC compensates with analogue gain.
++	 */
++	if (const char *envMaxUs = std::getenv("SOFTISP_MAX_EXPOSURE_US")) {
++		const double maxUs = std::atof(envMaxUs);
++		const double lineUs =
++			context_.configuration.agc.lineDuration.get<std::micro>();
++		if (maxUs > 0 && lineUs > 0) {
++			const int32_t maxLines = int32_t(maxUs / lineUs);
++			if (maxLines > 0 &&
++			    maxLines < context_.configuration.agc.exposureMax) {
++				LOG(IPASoft, Info)
++					<< "Capping exposure to " << maxLines
++					<< " lines (" << maxUs << " us)";
++				context_.configuration.agc.exposureMax = maxLines;
++			}
++		}
++	}
++
+ 	if (!context_.configuration.agc.exposureMin) {
+ 		LOG(IPASoft, Warning) << "Minimum exposure is zero, that can't be linear";
+ 		context_.configuration.agc.exposureMin = 1;

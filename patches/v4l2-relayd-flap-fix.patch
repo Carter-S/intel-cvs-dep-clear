@@ -1,0 +1,62 @@
+--- a/src/v4l2-relayd.c
++++ b/src/v4l2-relayd.c
+@@ -273,20 +273,43 @@
+   return splash_pipeline;
+ }
+ 
++static guint input_disable_timeout_id;
++
+ static void
+ input_pipeline_enable ()
+ {
++  if (input_disable_timeout_id != 0) {
++    g_source_remove (input_disable_timeout_id);
++    input_disable_timeout_id = 0;
++  }
+   gst_element_set_state (splash_pipeline_get (), GST_STATE_NULL);
+   gst_element_set_state (input_pipeline_get (), GST_STATE_PLAYING);
+ }
+ 
+-static void
+-input_pipeline_disable ()
++/* Local patch: readers (Chrome in particular) briefly flap the client
++ * count during device probing and stream renegotiation. Tearing the
++ * camera down instantly on count==0 causes a ~2.5s cold restart on the
++ * next open - visible as the camera "blinking". Absorb flaps with a
++ * grace period; only tear down if no client returns within it. */
++#define INPUT_DISABLE_GRACE_SECONDS 10
++
++static gboolean
++input_pipeline_disable_cb (gpointer user_data G_GNUC_UNUSED)
+ {
++  input_disable_timeout_id = 0;
+   if (input_pipeline != NULL)
+     gst_element_set_state (input_pipeline, GST_STATE_NULL);
+-  if (input_pipeline != NULL)
+-    gst_element_set_state (splash_pipeline, GST_STATE_PLAYING);
++  gst_element_set_state (splash_pipeline_get (), GST_STATE_PLAYING);
++  return G_SOURCE_REMOVE;
++}
++
++static void
++input_pipeline_disable ()
++{
++  if (input_disable_timeout_id == 0)
++    input_disable_timeout_id =
++        g_timeout_add_seconds (INPUT_DISABLE_GRACE_SECONDS,
++                               input_pipeline_disable_cb, NULL);
+ }
+ 
+ static gboolean
+@@ -436,6 +459,11 @@
+                 "format", GST_FORMAT_DEFAULT,
+                 "is-live", TRUE,
+                 "emit-signals", FALSE,
++                /* Local patch: bound the queue and drop oldest frames
++                 * instead of growing without limit under backpressure
++                 * (previously ballooned to hundreds of MB and aborted). */
++                "max-buffers", (guint64) 8,
++                "leaky-type", 2 /* GST_APP_LEAKY_TYPE_DOWNSTREAM */,
+                 NULL);
+   gst_object_unref (appsrc);
+ 

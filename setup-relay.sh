@@ -43,8 +43,16 @@ echo "== pipeline-from-file override (multi-element pipelines from tuner.py) =="
 cat > /etc/systemd/system/v4l2-relayd@.service.d/pipeline-file.conf <<'EOF'
 [Service]
 ExecStart=
-ExecStart=/bin/sh -c 'DEVICE=$(grep -l -m1 -E "^${CARD_LABEL}$" /sys/devices/virtual/video4linux/*/name | cut -d/ -f6); if [ -r /etc/v4l2-relayd.d/videosrc.pipeline ]; then VIDEOSRC="$(cat /etc/v4l2-relayd.d/videosrc.pipeline)"; fi; exec /usr/bin/v4l2-relayd -i "$${VIDEOSRC}" $${SPLASHSRC:+-s "${SPLASHSRC}"} -o "appsrc name=appsrc caps=video/x-raw,format=${FORMAT},width=${WIDTH},height=${HEIGHT},framerate=${FRAMERATE} ! videoconvert ! v4l2sink name=v4l2sink device=/dev/$${DEVICE}" $EXTRA_OPTS'
+ExecStart=/bin/sh -c 'DEVICE=$(grep -l -m1 -E "^${CARD_LABEL}$" /sys/devices/virtual/video4linux/*/name | cut -d/ -f6); if [ -r /etc/v4l2-relayd.d/videosrc.pipeline ]; then VIDEOSRC="$(cat /etc/v4l2-relayd.d/videosrc.pipeline)"; fi; RELAYD=/usr/local/bin/v4l2-relayd; [ -x $RELAYD ] || RELAYD=/usr/bin/v4l2-relayd; exec $RELAYD -i "$${VIDEOSRC}" $${SPLASHSRC:+-s "${SPLASHSRC}"} -o "appsrc name=appsrc caps=video/x-raw,format=${FORMAT},width=${WIDTH},height=${HEIGHT},framerate=${FRAMERATE} ! videoconvert ! v4l2sink name=v4l2sink device=/dev/$${DEVICE}" $EXTRA_OPTS'
 EOF
+
+echo "== patched v4l2-relayd (fixes Chrome-induced blinking + OOM crash) =="
+if pkg-config --exists gstreamer-video-1.0 2>/dev/null; then
+    make -C "$(dirname "$0")/v4l2-relayd-patched" install && echo "patched relayd installed"
+else
+    echo "SKIPPED (needs libgstreamer-plugins-base1.0-dev): stock relayd will"
+    echo "blink with Chrome. Install the dev package and rerun this script."
+fi
 
 echo "== vibrance plugin (optional, needs gst dev headers) =="
 if pkg-config --exists gstreamer-video-1.0 2>/dev/null; then

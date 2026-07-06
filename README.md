@@ -153,6 +153,29 @@ uncalibrated.yaml` and renders flat, hazy colour. Real fixes:
   headless paths tear/flicker on this stack (dma-buf sync). The CPU element
   is deterministic and costs ~4% of one core at 30fps.
 
+### The relay daemon needs patching too
+
+Stock `v4l2-relayd` 0.2.0 has two defects that only show up with real
+browsers (found the hard way, in a live meeting):
+
+1. **No teardown hysteresis.** It stops the camera the *instant* the
+   loopback's reader count hits zero and cold-starts it (~2.5s) when a
+   reader returns. Chrome flaps that count constantly (device probing,
+   stream renegotiation, tab events), so the camera "blinks". The patch
+   adds a 10s grace period before teardown.
+2. **Unbounded frame queue.** Its appsrc has no limit and no drop policy;
+   under consumer backpressure it grows by hundreds of MB and the daemon
+   aborts. The patch bounds it to 8 buffers, dropping oldest.
+
+`v4l2-relayd-patched/` carries the patched source (GPL-2.0, based on
+Canonical's 0.2.0); `setup-relay.sh` builds and installs it to
+`/usr/local/bin` and points the systemd unit at it. The standalone diff is
+`patches/v4l2-relayd-flap-fix.patch`.
+
+Also: avoid `videorate` in the relay input pipeline — with mismatched
+timestamp bases it burns CPU duplicating frames while real throughput
+collapses to ~1fps.
+
 ### Known limitation: exposure
 
 libcamera ≤ 0.7 (and master at time of writing) has **no exposure control
@@ -180,6 +203,10 @@ don't sit with a bright light behind you, and wipe the lens.
 | ~1fps + flicker to black | missing `framerate` in relay caps | pin caps (`setup-relay.sh`) |
 | `Device or resource busy` on the loopback | second reader | one camera app at a time |
 | Camera blinks on/off in Meet/Chrome (esp. after cold boot) | camera warm-up (~2.5s) exceeds Chrome's first-frame timeout; it open/close-loops the device | `SPLASHSRC` placeholder frames (`setup-relay.sh`) |
+| Camera blinks even with splash; relay crashes with SIGABRT / hundreds of MB RSS | stock v4l2-relayd tears the camera down instantly whenever Chrome flaps the reader count, and its frame queue is unbounded under backpressure | patched relayd (`v4l2-relayd-patched/`, installed by `setup-relay.sh`) |
+| Camera worked, then broke after a Chrome update: black page or "camera blocked" | Chrome update re-enabled its PipeWire camera path, which is broken on this stack | `chrome://flags/#enable-webrtc-pipewire-camera` -> Disabled, relaunch |
+| ~1s exposure in dim rooms: 1fps, white/black pumping | softISP AGC has no exposure limit; sensor winds exposure to its max | `SOFTISP_MAX_EXPOSURE_US` (patched IPA; tuner writes 30000) |
+| Camera picked up as "ipu6" / wrong device in apps | PipeWire exposes the ~48 raw IPU6 nodes | select "Virtual Camera" explicitly; keep Chrome's PipeWire camera flag off |
 | Washed-out / green / pale image | no tuning file for ov08x40 | `data/ov08x40.yaml` + `tuner.py` |
 | Blown-out highlights | AGC target hardcoded | `patches/softisp-agc-target.patch`, fix lighting |
 
