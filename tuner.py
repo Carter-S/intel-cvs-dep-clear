@@ -126,7 +126,13 @@ def conf_text(p):
             f"{post_chain(p)} ! videoconvert\"\n"
             f"SOFTISP_AGC_TARGET={p['agc_target']:.2f}\n"
             # our out-of-tree vibrance element lives here
-            "GST_PLUGIN_PATH=/usr/local/lib/gstreamer-1.0\n")
+            "GST_PLUGIN_PATH=/usr/local/lib/gstreamer-1.0\n"
+            # instant placeholder frames while the camera warms up (~2.5s):
+            # without this, Chrome times out waiting for the first frame and
+            # open/close-loops the device -> camera "blinks" in Meet
+            "SPLASHSRC=\"filesrc location=/etc/v4l2-relayd.d/splash.png"
+            " ! pngdec ! imagefreeze num-buffers=4 ! videoscale"
+            " ! videoconvert\"\n")
 
 
 def load_state():

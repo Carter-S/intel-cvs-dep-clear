@@ -11,8 +11,13 @@ apt-get install -y v4l2-relayd v4l2loopback-dkms gstreamer1.0-libcamera
 echo "== relay input: libcamera with explicit caps =="
 # framerate in caps is REQUIRED: without it the relay floods the loopback
 # with black filler frames (mistimed buffers) and apps see ~1fps + flicker.
+cp "$(dirname "$0")/data/splash.png" /etc/v4l2-relayd.d/splash.png
 cat > /etc/v4l2-relayd.d/camera.conf <<'EOF'
 VIDEOSRC="libcamerasrc ! video/x-raw,format=RGBA,width=1280,height=720,framerate=30/1 ! videoconvert"
+# instant placeholder frames while the camera warms up (~2.5s): without
+# this Chrome times out on the first frame and open/close-loops the
+# device -> camera "blinks" in Meet
+SPLASHSRC="filesrc location=/etc/v4l2-relayd.d/splash.png ! pngdec ! imagefreeze num-buffers=4 ! videoscale ! videoconvert"
 EOF
 
 echo "== allow the softISP to allocate dma-buf frame buffers =="

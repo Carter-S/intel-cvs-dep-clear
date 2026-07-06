@@ -179,6 +179,7 @@ don't sit with a bright light behind you, and wipe the lens.
 | Virtual Camera exists, only black frames | softISP dma-buf blocked by sandbox | dmabuf drop-in (`setup-relay.sh`) |
 | ~1fps + flicker to black | missing `framerate` in relay caps | pin caps (`setup-relay.sh`) |
 | `Device or resource busy` on the loopback | second reader | one camera app at a time |
+| Camera blinks on/off in Meet/Chrome (esp. after cold boot) | camera warm-up (~2.5s) exceeds Chrome's first-frame timeout; it open/close-loops the device | `SPLASHSRC` placeholder frames (`setup-relay.sh`) |
 | Washed-out / green / pale image | no tuning file for ov08x40 | `data/ov08x40.yaml` + `tuner.py` |
 | Blown-out highlights | AGC target hardcoded | `patches/softisp-agc-target.patch`, fix lighting |
 
