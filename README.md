@@ -207,6 +207,8 @@ don't sit with a bright light behind you, and wipe the lens.
 | Camera worked, then broke after a Chrome update: black page or "camera blocked" | Chrome update re-enabled its PipeWire camera path, which is broken on this stack | `chrome://flags/#enable-webrtc-pipewire-camera` -> Disabled, relaunch |
 | ~1s exposure in dim rooms: 1fps, white/black pumping | softISP AGC has no exposure limit; sensor winds exposure to its max | `SOFTISP_MAX_EXPOSURE_US` (patched IPA; tuner writes 30000) |
 | Camera picked up as "ipu6" / wrong device in apps | PipeWire exposes the ~48 raw IPU6 nodes | select "Virtual Camera" explicitly; keep Chrome's PipeWire camera flag off |
+| Periodic ~1s freezes during otherwise smooth video | wireplumber's libcamera monitor runs a second camera manager that contends with the relay | disable it (`setup-relay.sh` writes the wireplumber conf) |
+| Choppy/low fps, relay near 100% CPU | too many CPU post-processing stages in the relay pipeline | keep the chain lean: colour belongs in the CCM tuning file (GPU), exposure in `SOFTISP_AGC_TARGET` - avoid stacking videobalance/gamma/videoflip |
 | Washed-out / green / pale image | no tuning file for ov08x40 | `data/ov08x40.yaml` + `tuner.py` |
 | Blown-out highlights | AGC target hardcoded | `patches/softisp-agc-target.patch`, fix lighting |
 

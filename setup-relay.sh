@@ -62,6 +62,21 @@ else
     echo "  sudo make -C gst-vibrance install"
 fi
 
+echo "== disable wireplumber's libcamera monitor (prevents dual camera-manager stalls) =="
+# Two camera managers (wireplumber's + the relay's) contending over the same
+# sensor cause periodic ~1s frame stalls. Nothing needs PipeWire cameras on
+# this setup - apps use the V4L2 "Virtual Camera" directly.
+mkdir -p /etc/wireplumber/wireplumber.conf.d
+cat > /etc/wireplumber/wireplumber.conf.d/50-disable-libcamera.conf <<'EOF2'
+wireplumber.profiles = {
+  main = {
+    monitor.libcamera = disabled
+  }
+}
+EOF2
+echo "NOTE: restart wireplumber once as your normal user:"
+echo "  systemctl --user restart wireplumber xdg-desktop-portal xdg-desktop-portal-gnome"
+
 echo "== loading loopback + starting relay =="
 modprobe v4l2loopback exclusive_caps=1 card_label="Virtual Camera"
 systemctl daemon-reload
