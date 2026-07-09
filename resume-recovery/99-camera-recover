@@ -1,0 +1,7 @@
+#!/bin/sh
+# systemd sleep hook: self-heal the camera after resume if the USBIO
+# re-enumeration broke it.
+[ "$1" = "post" ] || exit 0
+# run detached: resume shouldn't wait on module reloads
+/usr/local/bin/camera-recover >/dev/null 2>&1 &
+exit 0

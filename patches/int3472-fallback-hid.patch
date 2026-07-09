@@ -1,0 +1,33 @@
+--- a/drivers/platform/x86/intel/int3472/common.c
++++ b/drivers/platform/x86/intel/int3472/common.c
+@@ -3,6 +3,18 @@
+ 
+ #include <linux/acpi.h>
+ #include <linux/platform_data/x86/int3472.h>
++
++/*
++ * Local patch: after a USBIO USB re-enumeration (e.g. some suspend/resume
++ * cycles) the boot-time ACPI dependency-list entries mapping sensors to
++ * their INT3472 have already been consumed, so re-probing fails with
++ * "seems to have no dependents" and the camera cannot recover without a
++ * reboot. Allow specifying the sensor HID explicitly as a fallback.
++ */
++static char *fallback_hid = "";
++module_param(fallback_hid, charp, 0644);
++MODULE_PARM_DESC(fallback_hid,
++		 "Sensor ACPI HID fallback when _DEP consumer lookup fails (e.g. OVTI08F4)");
+ #include <linux/slab.h>
+ 
+ union acpi_object *skl_int3472_get_acpi_buffer(struct acpi_device *adev, char *id)
+@@ -64,6 +76,11 @@
+ 	int ret = 0;
+ 
+ 	sensor = acpi_dev_get_next_consumer_dev(adev, NULL);
++	if (!sensor && fallback_hid[0]) {
++		dev_warn(dev, "no consumer via _DEP, trying fallback HID %s\n",
++			 fallback_hid);
++		sensor = acpi_dev_get_first_match_dev(fallback_hid, NULL, -1);
++	}
+ 	if (!sensor) {
+ 		dev_err(dev, "INT3472 seems to have no dependents.\n");
+ 		return -ENODEV;

@@ -1,0 +1,43 @@
+#!/bin/bash
+# Recover the IPU6/USBIO camera after suspend/resume broke it (USB
+# re-enumeration destroys the sensor's i2c world; three kernel bugs then
+# prevent it from ever coming back - see the repo README).
+# Safe to run any time: exits immediately if the camera is healthy.
+set -u
+MODDIR=/usr/local/lib/camera-recovery/$(uname -r)
+
+sensor_bound() { ls /sys/bus/i2c/drivers/ov08x40/ 2>/dev/null | grep -qi OVTI; }
+
+sensor_bound && exit 0
+# sensor client may need a few seconds to reappear after resume
+for i in $(seq 1 10); do
+    sleep 1
+    sensor_bound && exit 0
+    [ -e /sys/bus/i2c/devices/i2c-OVTI08F4:00 ] && break
+done
+sensor_bound && exit 0
+
+[ -d "$MODDIR" ] || { echo "camera-recover: no modules for $(uname -r)"; exit 1; }
+echo "camera-recover: sensor lost, rebuilding driver stack"
+
+systemctl stop v4l2-relayd@camera.service
+modprobe -r intel_ipu6_psys intel_ipu6_isys 2>/dev/null
+modprobe -r intel_ipu6 ipu_bridge 2>/dev/null
+modprobe -r intel_skl_int3472_discrete intel_skl_int3472_tps68470 intel_skl_int3472_common 2>/dev/null
+
+insmod $MODDIR/intel_skl_int3472_common.ko fallback_hid=OVTI08F4 2>/dev/null
+insmod $MODDIR/intel_skl_int3472_discrete.ko 2>/dev/null
+insmod $MODDIR/ipu-bridge.ko 2>/dev/null
+modprobe intel_ipu6_isys
+modprobe intel_ipu6_psys 2>/dev/null
+
+sleep 4
+sensor_bound || { echo i2c-OVTI08F4:00 > /sys/bus/i2c/drivers/ov08x40/bind 2>/dev/null; sleep 2; }
+systemctl start v4l2-relayd@camera.service
+
+if sensor_bound; then
+    echo "camera-recover: recovered"
+else
+    echo "camera-recover: FAILED - a reboot will restore the camera"
+    exit 1
+fi

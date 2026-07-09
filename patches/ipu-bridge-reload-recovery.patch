@@ -1,0 +1,101 @@
+--- a/drivers/media/pci/intel/ipu-bridge.c
++++ b/drivers/media/pci/intel/ipu-bridge.c
+@@ -878,6 +878,52 @@
+ 	return ipu_bridge_check_fwnode_graph(fwnode->secondary);
+ }
+ 
++
++/*
++ * Local patch: the bridge's software nodes are never unregistered when the
++ * module unloads, so any re-init collides with the stale nodes (-EEXIST)
++ * and the IPU probe fails. Purge leftovers (no-op on a clean boot).
++ */
++static void ipu_bridge_purge_stale_swnode(const char *name)
++{
++	const struct software_node *root, *node;
++	struct fwnode_handle *fw, *child, *gchild;
++
++	root = software_node_find_by_name(NULL, name);
++	if (!root)
++		return;
++	fw = software_node_fwnode(root);
++
++	while ((child = fwnode_get_next_child_node(fw, NULL))) {
++		while ((gchild = fwnode_get_next_child_node(child, NULL))) {
++			node = to_software_node(gchild);
++			fwnode_handle_put(gchild);
++			software_node_unregister(node);
++		}
++		node = to_software_node(child);
++		fwnode_handle_put(child);
++		software_node_unregister(node);
++	}
++	software_node_unregister(root);
++	fwnode_handle_put(fw);
++	pr_warn("ipu-bridge: purged stale software node %s\n", name);
++}
++
++static void ipu_bridge_purge_stale_swnodes(void)
++{
++	char name[64];
++	unsigned int i, k;
++
++	ipu_bridge_purge_stale_swnode(IPU_HID);
++	for (i = 0; i < ARRAY_SIZE(ipu_supported_sensors); i++) {
++		for (k = 0; k < 8; k++) {
++			snprintf(name, sizeof(name), "%s-%u",
++				 ipu_supported_sensors[i].hid, k);
++			ipu_bridge_purge_stale_swnode(name);
++		}
++	}
++}
++
+ static DEFINE_MUTEX(ipu_bridge_mutex);
+ 
+ int ipu_bridge_init(struct device *dev,
+@@ -890,13 +936,43 @@
+ 
+ 	guard(mutex)(&ipu_bridge_mutex);
+ 
+-	if (!ipu_bridge_check_fwnode_graph(dev_fwnode(dev)))
+-		return 0;
++	if (!ipu_bridge_check_fwnode_graph(dev_fwnode(dev))) {
++		/*
++		 * Local patch: after a module reload the IPU device can keep
++		 * a stale software-node graph while the sensors' endpoints
++		 * were unregistered with the old modules - the early return
++		 * then strands every sensor at "waiting for fwnode graph
++		 * endpoint" forever. If any present supported sensor lacks a
++		 * graph endpoint, drop the stale secondary and rebuild.
++		 */
++		struct acpi_device *sensor_adev;
++		bool rebuild = false;
++		unsigned int j;
++
++		for (j = 0; j < ARRAY_SIZE(ipu_supported_sensors); j++) {
++			for_each_acpi_dev_match(sensor_adev,
++						ipu_supported_sensors[j].hid,
++						NULL, -1) {
++				if (!sensor_adev->status.enabled)
++					continue;
++				if (ipu_bridge_check_fwnode_graph(
++					    acpi_fwnode_handle(sensor_adev)))
++					rebuild = true;
++			}
++		}
++		if (!rebuild)
++			return 0;
++		dev_warn(dev, "stale IPU fwnode graph, rebuilding sensor links\n");
++		set_secondary_fwnode(dev, NULL);
++	}
+ 
+ 	if (!ipu_bridge_ivsc_is_ready())
+ 		return dev_err_probe(dev, -EPROBE_DEFER,
+ 				     "waiting for IVSC to become ready\n");
+ 
++	/* clear leftovers from a previous bridge instance (module reload) */
++	ipu_bridge_purge_stale_swnodes();
++
+ 	bridge = kzalloc_obj(*bridge);
+ 	if (!bridge)
+ 		return -ENOMEM;

@@ -9,3 +9,4 @@
 .tmp_versions/
 __pycache__/
 *.so
+resume-recovery/*/*.ko

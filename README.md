@@ -191,6 +191,39 @@ don't sit with a bright light behind you, and wipe the lens.
 
 ---
 
+## Problem 4: the camera dies after suspend/resume
+
+Some suspend/resume cycles re-enumerate the USBIO USB device, destroying
+the sensor's I²C world. It can then **never recover without a reboot**,
+because three separate kernel bugs stack up:
+
+1. **Consumed ACPI dependencies:** the boot-time `_DEP` list entries that
+   let `int3472` find its sensor were consumed at boot; on re-probe it
+   fails with `INT3472 seems to have no dependents`.
+   → `patches/int3472-fallback-hid.patch` adds a `fallback_hid` module
+   parameter (e.g. `OVTI08F4`).
+2. **Stale IPU fwnode graph:** `ipu_bridge_init` early-returns because the
+   IPU device still carries the boot-time software-node graph, while the
+   sensor's endpoints are gone — the sensor waits forever at
+   `waiting for fwnode graph endpoint`.
+3. **Leaked software nodes:** the old bridge's nodes are never
+   unregistered, so any rebuild collides (`kobject_add ... -EEXIST`) and
+   the whole IPU probe fails.
+   → `patches/ipu-bridge-reload-recovery.patch` fixes 2 + 3 (detects the
+   half-torn state, purges stale nodes, rebuilds).
+
+`resume-recovery/` contains the patched module sources, a `camera-recover`
+script that performs the full recovery, and a systemd sleep hook that runs
+it automatically after every resume (it exits instantly when the camera is
+healthy). Install with:
+
+```bash
+sudo make -C resume-recovery install
+```
+
+Note: the stale-node purge can print a one-time kernel WARN backtrace
+during recovery — cosmetic; the rebuild proceeds.
+
 ## Troubleshooting quick reference
 
 | Symptom | Cause | Fix |
@@ -210,6 +243,7 @@ don't sit with a bright light behind you, and wipe the lens.
 | Periodic ~1s freezes during otherwise smooth video | wireplumber's libcamera monitor runs a second camera manager that contends with the relay | disable it (`setup-relay.sh` writes the wireplumber conf) |
 | Choppy/low fps, relay near 100% CPU | too many CPU post-processing stages in the relay pipeline | keep the chain lean: colour belongs in the CCM tuning file (GPU), exposure in `SOFTISP_AGC_TARGET` - avoid stacking videobalance/gamma/videoflip |
 | Washed-out / green / pale image | no tuning file for ov08x40 | `data/ov08x40.yaml` + `tuner.py` |
+| Camera gone after suspend (`No sensor found for /dev/media0`, ov08x40 not bound) | USBIO re-enumeration + 3 kernel bugs (see Problem 4) | `resume-recovery/` (auto via sleep hook) |
 | Blown-out highlights | AGC target hardcoded | `patches/softisp-agc-target.patch`, fix lighting |
 
 ## Verified working on

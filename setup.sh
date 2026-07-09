@@ -33,6 +33,10 @@ echo "==== [3/4] app bridge + tuning + vibrance ===="
 ./setup-relay.sh
 
 echo
+echo "==== [3.5/4] suspend/resume self-healing ===="
+make -C resume-recovery install && echo "resume recovery hook installed"
+
+echo
 echo "==== [4/4] done ===="
 cam -l 2>/dev/null | grep -A3 "Available" || true
 echo
